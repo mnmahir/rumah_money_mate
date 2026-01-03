@@ -54,7 +54,7 @@ router.get('/', authenticateToken, async (req: AuthRequest, res) => {
 // Create recurring expense
 router.post('/', authenticateToken, async (req: AuthRequest, res) => {
   try {
-    const { description, amount, frequency, startDate, endDate, totalOccurrences, categoryId, notes, userId, splitEqually } = req.body;
+    const { description, amount, frequency, startDate, endDate, totalOccurrences, categoryId, notes, userId, splitEqually, splitType, splitConfig } = req.body;
 
     // Allow creating for another user
     const targetUserId = userId || req.user!.id;
@@ -71,7 +71,9 @@ router.post('/', authenticateToken, async (req: AuthRequest, res) => {
         categoryId: categoryId || null,
         notes,
         userId: targetUserId,
-        splitEqually: splitEqually !== undefined ? splitEqually : true
+        splitEqually: splitEqually !== undefined ? splitEqually : true,
+        splitType: splitType || 'equal',
+        splitConfig: splitConfig ? JSON.stringify(splitConfig) : null
       },
       include: {
         user: {
@@ -91,7 +93,7 @@ router.post('/', authenticateToken, async (req: AuthRequest, res) => {
 router.put('/:id', authenticateToken, async (req: AuthRequest, res) => {
   try {
     const { id } = req.params;
-    const { description, amount, frequency, endDate, totalOccurrences, categoryId, notes, isActive } = req.body;
+    const { description, amount, frequency, startDate, endDate, totalOccurrences, categoryId, notes, isActive, splitEqually, splitType, splitConfig, userId } = req.body;
 
     const existing = await prisma.recurringExpense.findUnique({ where: { id } });
     if (!existing) {
@@ -103,17 +105,29 @@ router.put('/:id', authenticateToken, async (req: AuthRequest, res) => {
       return res.status(403).json({ error: 'Not authorized to update this recurring expense' });
     }
 
+    // If startDate changed and is in the future, update nextDueDate as well
+    let newNextDueDate = existing.nextDueDate;
+    if (startDate && new Date(startDate).getTime() !== existing.startDate.getTime()) {
+      newNextDueDate = new Date(startDate);
+    }
+
     const recurring = await prisma.recurringExpense.update({
       where: { id },
       data: {
         description,
         amount: amount ? parseFloat(amount) : undefined,
         frequency,
-        endDate: endDate ? new Date(endDate) : null,
-        totalOccurrences: totalOccurrences ? parseInt(totalOccurrences) : null,
-        categoryId: categoryId || null,
+        startDate: startDate ? new Date(startDate) : undefined,
+        nextDueDate: newNextDueDate,
+        endDate: endDate ? new Date(endDate) : endDate === '' ? null : undefined,
+        totalOccurrences: totalOccurrences ? parseInt(totalOccurrences) : totalOccurrences === '' ? null : undefined,
+        categoryId: categoryId || categoryId === '' ? (categoryId || null) : undefined,
         notes,
-        isActive: isActive !== undefined ? isActive : undefined
+        isActive: isActive !== undefined ? isActive : undefined,
+        splitEqually: splitEqually !== undefined ? splitEqually : undefined,
+        splitType: splitType || undefined,
+        splitConfig: splitConfig !== undefined ? (splitConfig ? JSON.stringify(splitConfig) : null) : undefined,
+        userId: userId || undefined
       },
       include: {
         user: {
@@ -247,18 +261,67 @@ router.post('/process', authenticateToken, async (req: AuthRequest, res) => {
         continue;
       }
 
-      // Calculate splits if splitEqually is enabled
+      // Calculate splits based on configuration
       let splitsData: { userId: string; amount: number }[] = [];
-      if (recurring.splitEqually && activeUsers.length > 0) {
-        const perPerson = Math.floor((recurring.amount / activeUsers.length) * 100) / 100;
-        const totalOthers = perPerson * (activeUsers.length - 1);
-        const ownerAmount = Math.round((recurring.amount - totalOthers) * 100) / 100;
+      
+      if (recurring.splitEqually) {
+        // Split equally among all active users
+        if (activeUsers.length > 0) {
+          const perPerson = Math.floor((recurring.amount / activeUsers.length) * 100) / 100;
+          const totalOthers = perPerson * (activeUsers.length - 1);
+          const ownerAmount = Math.round((recurring.amount - totalOthers) * 100) / 100;
+          
+          splitsData = activeUsers.map((u) => ({
+            userId: u.id,
+            amount: u.id === recurring.userId ? ownerAmount : perPerson
+          }));
+        }
+      } else if (recurring.splitConfig) {
+        // Use custom split configuration
+        const config = JSON.parse(recurring.splitConfig) as Array<{ memberId: string; percentage?: number; amount?: number }>;
+        const splitType = recurring.splitType || 'equal';
         
-        // Owner (userId) gets remainder, others get equal share
-        splitsData = activeUsers.map((u, idx) => ({
-          userId: u.id,
-          amount: u.id === recurring.userId ? ownerAmount : perPerson
-        }));
+        if (splitType === 'percentage') {
+          // Calculate based on percentage
+          let totalOthersAmount = 0;
+          const othersAmounts = config.slice(1).map((c) => {
+            const percentage = c.percentage || 0;
+            const amount = Math.round((recurring.amount * percentage / 100) * 100) / 100;
+            totalOthersAmount += amount;
+            return { userId: c.memberId, amount };
+          });
+          
+          // Owner gets remainder
+          const ownerAmount = Math.round((recurring.amount - totalOthersAmount) * 100) / 100;
+          splitsData = [
+            { userId: config[0]?.memberId || recurring.userId, amount: ownerAmount },
+            ...othersAmounts
+          ];
+        } else if (splitType === 'amount') {
+          // Calculate based on fixed amounts
+          let totalOthersAmount = 0;
+          const othersAmounts = config.slice(1).map((c) => {
+            totalOthersAmount += c.amount || 0;
+            return { userId: c.memberId, amount: c.amount || 0 };
+          });
+          
+          // Owner gets remainder
+          const ownerAmount = Math.round((recurring.amount - totalOthersAmount) * 100) / 100;
+          splitsData = [
+            { userId: config[0]?.memberId || recurring.userId, amount: Math.max(0, ownerAmount) },
+            ...othersAmounts
+          ];
+        } else {
+          // Equal split among selected members
+          const perPerson = Math.floor((recurring.amount / config.length) * 100) / 100;
+          const totalOthers = perPerson * (config.length - 1);
+          const ownerAmount = Math.round((recurring.amount - totalOthers) * 100) / 100;
+          
+          splitsData = config.map((c, idx) => ({
+            userId: c.memberId,
+            amount: idx === 0 ? ownerAmount : perPerson
+          }));
+        }
       }
 
       // Create expense record with splits

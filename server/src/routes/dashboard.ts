@@ -4,9 +4,47 @@ import { authenticateToken, AuthRequest } from '../middleware/auth';
 
 const router = Router();
 
+// Get date range of available data (earliest and latest expense dates)
+router.get('/date-range', authenticateToken, async (req: AuthRequest, res) => {
+  try {
+    const [earliest, latest] = await Promise.all([
+      prisma.expense.findFirst({
+        where: { isDeleted: false },
+        orderBy: { date: 'asc' },
+        select: { date: true }
+      }),
+      prisma.expense.findFirst({
+        where: { isDeleted: false },
+        orderBy: { date: 'desc' },
+        select: { date: true }
+      })
+    ]);
+
+    const now = new Date();
+    
+    res.json({
+      earliestDate: earliest?.date || now,
+      latestDate: latest?.date || now,
+      earliestMonth: earliest ? new Date(earliest.date).getMonth() + 1 : now.getMonth() + 1,
+      earliestYear: earliest ? new Date(earliest.date).getFullYear() : now.getFullYear(),
+      latestMonth: latest ? new Date(latest.date).getMonth() + 1 : now.getMonth() + 1,
+      latestYear: latest ? new Date(latest.date).getFullYear() : now.getFullYear(),
+      hasData: !!earliest
+    });
+  } catch (error) {
+    console.error('Get date range error:', error);
+    res.status(500).json({ error: 'Failed to get date range' });
+  }
+});
+
 // Helper to get start date based on period
-function getStartDateForPeriod(period: string): Date {
+function getStartDateForPeriod(period: string, startMonth?: string, startYear?: string): Date {
   const now = new Date();
+  
+  // Handle custom date range
+  if (period === 'custom' && startMonth && startYear) {
+    return new Date(parseInt(startYear), parseInt(startMonth) - 1, 1);
+  }
   
   switch (period) {
     case '6months':
@@ -24,8 +62,24 @@ function getStartDateForPeriod(period: string): Date {
   }
 }
 
+// Helper to get end date for custom range
+function getEndDateForPeriod(period: string, endMonth?: string, endYear?: string): Date {
+  if (period === 'custom' && endMonth && endYear) {
+    // Last day of the end month
+    return new Date(parseInt(endYear), parseInt(endMonth), 0, 23, 59, 59, 999);
+  }
+  return new Date(); // Current date for non-custom periods
+}
+
 // Helper to get number of months for period
-function getMonthsForPeriod(period: string): number {
+function getMonthsForPeriod(period: string, startMonth?: string, startYear?: string, endMonth?: string, endYear?: string): number {
+  if (period === 'custom' && startMonth && startYear && endMonth && endYear) {
+    const start = new Date(parseInt(startYear), parseInt(startMonth) - 1, 1);
+    const end = new Date(parseInt(endYear), parseInt(endMonth) - 1, 1);
+    const months = (end.getFullYear() - start.getFullYear()) * 12 + (end.getMonth() - start.getMonth()) + 1;
+    return Math.max(1, Math.min(months, 120)); // Cap at 10 years
+  }
+  
   switch (period) {
     case '6months': return 6;
     case '1year': return 12;
@@ -39,12 +93,13 @@ function getMonthsForPeriod(period: string): number {
 // Get dashboard summary
 router.get('/summary', authenticateToken, async (req: AuthRequest, res) => {
   try {
-    const { period = '6months', userId } = req.query;
+    const { period = '6months', userId, startMonth, startYear, endMonth, endYear } = req.query;
 
-    const startDate = getStartDateForPeriod(period as string);
+    const startDate = getStartDateForPeriod(period as string, startMonth as string, startYear as string);
+    const endDate = getEndDateForPeriod(period as string, endMonth as string, endYear as string);
 
     const where: any = {
-      date: { gte: startDate }
+      date: { gte: startDate, lte: endDate }
     };
     if (userId) where.userId = userId;
 
@@ -128,23 +183,61 @@ router.get('/summary', authenticateToken, async (req: AuthRequest, res) => {
   }
 });
 
-// Get expense trend over time (with optional category filter)
+// Get expense trend over time (with optional category filter - supports multiple categories)
 router.get('/expense-trend', authenticateToken, async (req: AuthRequest, res) => {
   try {
-    const { period = '6months', categoryId, userId } = req.query;
+    const { period = '6months', categoryId, categoryIds, userId, startMonth, startYear, endMonth, endYear } = req.query;
     
-    const numMonths = getMonthsForPeriod(period as string);
+    const numMonths = getMonthsForPeriod(period as string, startMonth as string, startYear as string, endMonth as string, endYear as string);
     const months = [];
-    const now = new Date();
+    
+    // For custom period, start from the specified start date
+    let baseDate: Date;
+    if (period === 'custom' && startMonth && startYear) {
+      baseDate = new Date(parseInt(startYear as string), parseInt(startMonth as string) - 1, 1);
+    } else {
+      const now = new Date();
+      baseDate = new Date(now.getFullYear(), now.getMonth() - numMonths + 1, 1);
+    }
 
-    for (let i = numMonths - 1; i >= 0; i--) {
-      const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const endDate = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+    // Parse category IDs - can be single categoryId or comma-separated categoryIds
+    let categoryFilter: string[] | null = null;
+    if (categoryIds && categoryIds !== 'all') {
+      categoryFilter = (categoryIds as string).split(',').filter(id => id && id !== 'all');
+    } else if (categoryId && categoryId !== 'all') {
+      categoryFilter = [categoryId as string];
+    }
+
+    for (let i = 0; i < numMonths; i++) {
+      const date = new Date(baseDate.getFullYear(), baseDate.getMonth() + i, 1);
+      const monthEndDate = new Date(date.getFullYear(), date.getMonth() + 1, 0);
 
       const where: any = {
-        date: { gte: date, lte: endDate }
+        date: { gte: date, lte: monthEndDate },
+        isDeleted: false
       };
-      if (categoryId && categoryId !== 'all') where.categoryId = categoryId;
+      
+      // Handle category filtering
+      if (categoryFilter && categoryFilter.length > 0) {
+        // Check if 'uncategorized' is in the filter
+        const hasUncategorized = categoryFilter.includes('uncategorized');
+        const actualCategoryIds = categoryFilter.filter(id => id !== 'uncategorized');
+        
+        if (hasUncategorized && actualCategoryIds.length > 0) {
+          // Both uncategorized and specific categories
+          where.OR = [
+            { categoryId: null },
+            { categoryId: { in: actualCategoryIds } }
+          ];
+        } else if (hasUncategorized) {
+          // Only uncategorized
+          where.categoryId = null;
+        } else {
+          // Only specific categories
+          where.categoryId = { in: actualCategoryIds };
+        }
+      }
+      
       if (userId) where.userId = userId;
 
       const result = await prisma.expense.aggregate({
@@ -169,10 +262,18 @@ router.get('/expense-trend', authenticateToken, async (req: AuthRequest, res) =>
 // Get utilities trend (Water and Electricity usage and amount)
 router.get('/utilities-trend', authenticateToken, async (req: AuthRequest, res) => {
   try {
-    const { period = '6months' } = req.query;
+    const { period = '6months', startMonth, startYear, endMonth, endYear } = req.query;
     
-    const numMonths = getMonthsForPeriod(period as string);
-    const now = new Date();
+    const numMonths = getMonthsForPeriod(period as string, startMonth as string, startYear as string, endMonth as string, endYear as string);
+    
+    // For custom period, start from the specified start date
+    let baseDate: Date;
+    if (period === 'custom' && startMonth && startYear) {
+      baseDate = new Date(parseInt(startYear as string), parseInt(startMonth as string) - 1, 1);
+    } else {
+      const now = new Date();
+      baseDate = new Date(now.getFullYear(), now.getMonth() - numMonths + 1, 1);
+    }
 
     // Find Water and Electricity categories
     const waterCategory = await prisma.category.findFirst({
@@ -184,11 +285,11 @@ router.get('/utilities-trend', authenticateToken, async (req: AuthRequest, res) 
 
     const data = [];
 
-    for (let i = numMonths - 1; i >= 0; i--) {
-      const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const endDate = new Date(date.getFullYear(), date.getMonth() + 1, 0);
+    for (let i = 0; i < numMonths; i++) {
+      const date = new Date(baseDate.getFullYear(), baseDate.getMonth() + i, 1);
+      const monthEndDate = new Date(date.getFullYear(), date.getMonth() + 1, 0);
 
-      const dateFilter = { gte: date, lte: endDate };
+      const dateFilter = { gte: date, lte: monthEndDate };
 
       // Get water expenses for this month
       let waterAmount = 0;

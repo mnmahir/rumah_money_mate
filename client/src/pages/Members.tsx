@@ -32,6 +32,9 @@ interface UserStats {
   totalPaymentsMade: number;
   totalPaymentsReceived: number;
   expenseCount: number;
+  userTotalDebt: number;
+  debtToCurrentUser: number;
+  currentUserDebt: number;
 }
 
 export default function Members() {
@@ -199,18 +202,54 @@ export default function Members() {
             {/* Stats */}
             {stats[member.id] && (
               <div className="grid grid-cols-2 gap-3">
-                <div className="glass-card p-3 bg-white/5">
-                  <p className="text-xs text-white/50">Total Expenses</p>
-                  <p className="text-lg font-semibold text-white">
-                    RM {stats[member.id].totalExpenses.toFixed(2)}
-                  </p>
-                </div>
-                <div className="glass-card p-3 bg-white/5">
-                  <p className="text-xs text-white/50">Transactions</p>
-                  <p className="text-lg font-semibold text-white">
-                    {stats[member.id].expenseCount}
-                  </p>
-                </div>
+                {member.id === currentUser?.id ? (
+                  // My own card - show my total debt
+                  <>
+                    <div className="col-span-2 glass-card p-3 bg-white/5">
+                      <p className="text-xs text-white/50">My Total Debt</p>
+                      <p className={`text-lg font-semibold ${
+                        stats[member.id].userTotalDebt > 0 
+                          ? 'text-red-400' 
+                          : 'text-green-400'
+                      }`}>
+                        RM {stats[member.id].userTotalDebt.toFixed(2)}
+                        {stats[member.id].userTotalDebt === 0 && (
+                          <span className="text-xs ml-2">✓ Settled</span>
+                        )}
+                      </p>
+                    </div>
+                  </>
+                ) : (
+                  // Other member's card - show debt relationship
+                  <>
+                    <div className="glass-card p-3 bg-white/5">
+                      <p className="text-xs text-white/50">Owes You</p>
+                      <p className={`text-lg font-semibold ${
+                        stats[member.id].debtToCurrentUser > 0 
+                          ? 'text-red-400' 
+                          : 'text-green-400'
+                      }`}>
+                        RM {stats[member.id].debtToCurrentUser.toFixed(2)}
+                        {stats[member.id].debtToCurrentUser === 0 && (
+                          <span className="text-xs ml-1">✓</span>
+                        )}
+                      </p>
+                    </div>
+                    <div className="glass-card p-3 bg-white/5">
+                      <p className="text-xs text-white/50">You Owe</p>
+                      <p className={`text-lg font-semibold ${
+                        stats[member.id].currentUserDebt > 0 
+                          ? 'text-red-400' 
+                          : 'text-green-400'
+                      }`}>
+                        RM {stats[member.id].currentUserDebt.toFixed(2)}
+                        {stats[member.id].currentUserDebt === 0 && (
+                          <span className="text-xs ml-1">✓</span>
+                        )}
+                      </p>
+                    </div>
+                  </>
+                )}
               </div>
             )}
 

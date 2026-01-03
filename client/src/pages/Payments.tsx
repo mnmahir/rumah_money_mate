@@ -11,6 +11,9 @@ import {
   MagnifyingGlassIcon,
   FunnelIcon,
   CalendarIcon,
+  EyeIcon,
+  DocumentTextIcon,
+  ArrowRightIcon,
 } from '@heroicons/react/24/outline';
 import { paymentsAPI, usersAPI, deleteRequestsAPI } from '../lib/api';
 import { useAuthStore } from '../stores/authStore';
@@ -54,7 +57,7 @@ interface Balance {
 
 export default function Payments() {
   const { user } = useAuthStore();
-  const { currency } = useSettingsStore();
+  const { currency, requirePaymentReceipt, allowUserSelfDelete } = useSettingsStore();
   const [payments, setPayments] = useState<Payment[]>([]);
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const [balances, setBalances] = useState<Balance[]>([]);
@@ -64,6 +67,8 @@ export default function Payments() {
   const [showPaymentInfoModal, setShowPaymentInfoModal] = useState(false);
   const [showQrModal, setShowQrModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showViewModal, setShowViewModal] = useState(false);
+  const [viewingPayment, setViewingPayment] = useState<Payment | null>(null);
   const [deletingPayment, setDeletingPayment] = useState<Payment | null>(null);
   const [deleteReason, setDeleteReason] = useState('');
   const [selectedReceipt, setSelectedReceipt] = useState<string | null>(null);
@@ -112,8 +117,13 @@ export default function Payments() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!formData.toUserId || !formData.amount || !formData.receipt) {
-      toast.error('Please fill in all required fields and attach receipt');
+    if (!formData.toUserId || !formData.amount) {
+      toast.error('Please fill in all required fields');
+      return;
+    }
+
+    if (requirePaymentReceipt && !formData.receipt) {
+      toast.error('Please attach a receipt as proof of payment');
       return;
     }
 
@@ -123,7 +133,7 @@ export default function Payments() {
       data.append('amount', formData.amount);
       if (formData.fromUserId) data.append('fromUserId', formData.fromUserId);
       if (formData.description) data.append('description', formData.description);
-      data.append('receipt', formData.receipt);
+      if (formData.receipt) data.append('receipt', formData.receipt);
 
       await paymentsAPI.create(data);
       toast.success('Payment recorded successfully');
@@ -171,8 +181,10 @@ export default function Payments() {
   };
 
   const handleDelete = async (payment: Payment) => {
+    const isOwner = payment.fromUser.id === user?.id;
+    
     if (user?.isAdmin) {
-      // Admin can delete directly
+      // Admin can always delete directly
       if (!confirm('Are you sure you want to delete this payment?')) return;
       try {
         await paymentsAPI.delete(payment.id);
@@ -181,8 +193,23 @@ export default function Payments() {
       } catch (error: any) {
         toast.error(error.response?.data?.error || 'Failed to delete payment');
       }
+    } else if (isOwner && allowUserSelfDelete) {
+      // Owner can delete directly when setting enabled
+      if (!confirm('Are you sure you want to delete this payment?')) return;
+      try {
+        await paymentsAPI.delete(payment.id);
+        toast.success('Payment deleted successfully');
+        fetchData();
+      } catch (error: any) {
+        toast.error(error.response?.data?.error || 'Failed to delete payment');
+      }
+    } else if (isOwner && !allowUserSelfDelete) {
+      // Owner but setting disabled - show delete request modal
+      setDeletingPayment(payment);
+      setDeleteReason('');
+      setShowDeleteModal(true);
     } else {
-      // Non-admin: show delete request modal
+      // Not owner - show delete request modal
       setDeletingPayment(payment);
       setDeleteReason('');
       setShowDeleteModal(true);
@@ -555,6 +582,17 @@ export default function Payments() {
                       </td>
                       <td className="table-cell">
                         <div className="flex items-center gap-2">
+                          {/* View Button - Available to everyone */}
+                          <button
+                            onClick={() => {
+                              setViewingPayment(payment);
+                              setShowViewModal(true);
+                            }}
+                            className="p-1.5 rounded-lg text-white/60 hover:bg-purple-500/20 hover:text-purple-400"
+                            title="View details"
+                          >
+                            <EyeIcon className="w-4 h-4" />
+                          </button>
                           {payment.status === 'pending' &&
                             (payment.toUser.id === user?.id || user?.isAdmin) && (
                               <>
@@ -578,13 +616,13 @@ export default function Payments() {
                             <button
                               onClick={() => handleDelete(payment)}
                               className={`p-1.5 rounded-lg text-white/60 ${
-                                user?.isAdmin 
+                                user?.isAdmin || allowUserSelfDelete
                                   ? 'hover:bg-red-500/20 hover:text-red-400'
                                   : 'hover:bg-yellow-500/20 hover:text-yellow-400'
                               }`}
-                              title={user?.isAdmin ? 'Delete' : 'Request deletion'}
+                              title={user?.isAdmin ? 'Delete' : (allowUserSelfDelete ? 'Delete' : 'Request deletion')}
                             >
-                              {user?.isAdmin ? (
+                              {user?.isAdmin || allowUserSelfDelete ? (
                                 <TrashIcon className="w-4 h-4" />
                               ) : (
                                 <ExclamationTriangleIcon className="w-4 h-4" />
@@ -720,7 +758,7 @@ export default function Payments() {
 
           <div>
             <label className="block text-sm font-medium text-white/70 mb-2">
-              Receipt (Proof of Payment) <span className="text-red-400">*</span>
+              Receipt (Proof of Payment) {requirePaymentReceipt && <span className="text-red-400">*</span>}
             </label>
             <label className="glass-input flex items-center justify-center gap-2 cursor-pointer hover:bg-white/10">
               <PhotoIcon className="w-5 h-5 text-white/40" />
@@ -893,6 +931,135 @@ export default function Payments() {
             </button>
           </div>
         </div>
+      </Modal>
+
+      {/* View Payment Modal */}
+      <Modal
+        isOpen={showViewModal}
+        onClose={() => {
+          setShowViewModal(false);
+          setViewingPayment(null);
+        }}
+        title="Payment Details"
+      >
+        {viewingPayment && (
+          <div className="space-y-6">
+            {/* Header with amount */}
+            <div className="text-center p-6 rounded-2xl bg-gradient-to-br from-green-500/20 to-emerald-500/20 border border-white/10">
+              <p className="text-white/60 text-sm mb-1">Amount</p>
+              <p className="text-4xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-green-400 to-emerald-400">
+                {currency} {viewingPayment.amount.toFixed(2)}
+              </p>
+              {/* Status Badge */}
+              <div className="mt-3">
+                {viewingPayment.status === 'confirmed' && (
+                  <span className="px-3 py-1 rounded-full text-sm bg-green-500/20 text-green-400 border border-green-500/30">
+                    ✓ Confirmed
+                  </span>
+                )}
+                {viewingPayment.status === 'pending' && (
+                  <span className="px-3 py-1 rounded-full text-sm bg-yellow-500/20 text-yellow-400 border border-yellow-500/30">
+                    ⏳ Pending
+                  </span>
+                )}
+                {viewingPayment.status === 'rejected' && (
+                  <span className="px-3 py-1 rounded-full text-sm bg-red-500/20 text-red-400 border border-red-500/30">
+                    ✗ Rejected
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Payment Flow */}
+            <div className="flex items-center justify-center gap-4 p-4 rounded-xl bg-white/5">
+              <div className="text-center">
+                {viewingPayment.fromUser.avatarUrl ? (
+                  <img src={viewingPayment.fromUser.avatarUrl} className="w-12 h-12 rounded-full mx-auto mb-2" alt="" />
+                ) : (
+                  <div className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-400 to-purple-600 flex items-center justify-center text-lg text-white mx-auto mb-2">
+                    {viewingPayment.fromUser.displayName[0]}
+                  </div>
+                )}
+                <p className="text-white font-medium">{viewingPayment.fromUser.displayName}</p>
+                <p className="text-white/40 text-xs">Paid</p>
+              </div>
+              <ArrowRightIcon className="w-6 h-6 text-green-400" />
+              <div className="text-center">
+                {viewingPayment.toUser.avatarUrl ? (
+                  <img src={viewingPayment.toUser.avatarUrl} className="w-12 h-12 rounded-full mx-auto mb-2" alt="" />
+                ) : (
+                  <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-lg text-white mx-auto mb-2">
+                    {viewingPayment.toUser.displayName[0]}
+                  </div>
+                )}
+                <p className="text-white font-medium">{viewingPayment.toUser.displayName}</p>
+                <p className="text-white/40 text-xs">Received</p>
+              </div>
+            </div>
+
+            {/* Details Grid */}
+            <div className="grid grid-cols-2 gap-4">
+              {/* Date */}
+              <div className="p-4 rounded-xl bg-white/5">
+                <div className="flex items-center gap-2 text-white/60 text-sm mb-1">
+                  <CalendarIcon className="w-4 h-4" />
+                  <span>Date</span>
+                </div>
+                <p className="text-white font-medium">
+                  {format(new Date(viewingPayment.date), 'dd MMM yyyy')}
+                </p>
+              </div>
+
+              {/* Time */}
+              <div className="p-4 rounded-xl bg-white/5">
+                <div className="flex items-center gap-2 text-white/60 text-sm mb-1">
+                  <CalendarIcon className="w-4 h-4" />
+                  <span>Time</span>
+                </div>
+                <p className="text-white font-medium">
+                  {format(new Date(viewingPayment.date), 'HH:mm')}
+                </p>
+              </div>
+            </div>
+
+            {/* Description */}
+            {viewingPayment.description && (
+              <div className="p-4 rounded-xl bg-white/5">
+                <div className="flex items-center gap-2 text-white/60 text-sm mb-2">
+                  <DocumentTextIcon className="w-4 h-4" />
+                  <span>Description</span>
+                </div>
+                <p className="text-white">{viewingPayment.description}</p>
+              </div>
+            )}
+
+            {/* Receipt */}
+            {viewingPayment.receiptImage && (
+              <div className="p-4 rounded-xl bg-white/5">
+                <div className="flex items-center gap-2 text-white/60 text-sm mb-2">
+                  <PhotoIcon className="w-4 h-4" />
+                  <span>Receipt</span>
+                </div>
+                <img
+                  src={viewingPayment.receiptImage}
+                  alt="Receipt"
+                  className="w-full rounded-xl cursor-pointer hover:opacity-80 transition-opacity"
+                  onClick={() => handleViewReceipt(viewingPayment.receiptImage!)}
+                />
+              </div>
+            )}
+
+            <button
+              onClick={() => {
+                setShowViewModal(false);
+                setViewingPayment(null);
+              }}
+              className="glass-button w-full"
+            >
+              Close
+            </button>
+          </div>
+        )}
       </Modal>
     </div>
   );

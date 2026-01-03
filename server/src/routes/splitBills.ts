@@ -77,7 +77,7 @@ router.post('/calculate', authenticateToken, async (req: AuthRequest, res) => {
 // Create expenses from split bill calculation (single grouped record with splits)
 router.post('/create-expenses', authenticateToken, upload.single('receipt'), async (req: AuthRequest, res) => {
   try {
-    const { title, items, taxAmount = 0, serviceCharge = 0, taxPercent, servicePercent, categoryId, date, notes } = req.body;
+    const { title, items, taxAmount = 0, serviceCharge = 0, taxPercent, servicePercent, categoryId, date, notes, paidByUserId } = req.body;
 
     // Parse items if it's a string
     const parsedItems = typeof items === 'string' ? JSON.parse(items) : items;
@@ -119,8 +119,8 @@ router.post('/create-expenses', authenticateToken, upload.single('receipt'), asy
       return { userId, amount: total };
     });
 
-    // Create a single expense with splits (assigned to the first user/creator)
-    const primaryUserId = req.user!.id;
+    // Use paidByUserId if provided, otherwise default to creator
+    const expenseUserId = paidByUserId || req.user!.id;
     
     const expense = await prisma.expense.create({
       data: {
@@ -129,7 +129,7 @@ router.post('/create-expenses', authenticateToken, upload.single('receipt'), asy
         date: date ? new Date(date) : new Date(),
         receiptImage,
         notes: notes || `Split bill - ${userSplits.length} people`,
-        userId: primaryUserId,
+        userId: expenseUserId,
         createdById: req.user!.id,
         categoryId: categoryId || null,
         splits: {
@@ -170,7 +170,7 @@ router.post('/create-expenses', authenticateToken, upload.single('receipt'), asy
 // Quick split - split a total amount equally among users (single grouped record)
 router.post('/quick-split', authenticateToken, upload.single('receipt'), async (req: AuthRequest, res) => {
   try {
-    const { description, totalAmount, taxAmount = 0, serviceCharge = 0, taxPercent, servicePercent, userIds, categoryId, date, notes } = req.body;
+    const { description, totalAmount, taxAmount = 0, serviceCharge = 0, taxPercent, servicePercent, userIds, categoryId, date, notes, paidByUserId } = req.body;
 
     // Parse userIds if it's a string
     const parsedUserIds: string[] = typeof userIds === 'string' ? JSON.parse(userIds) : userIds;
@@ -207,8 +207,8 @@ router.post('/quick-split', authenticateToken, upload.single('receipt'), async (
       amount: idx === 0 ? firstPersonAmount : perPerson
     }));
 
-    // Create a single expense with splits (assigned to first user or creator)
-    const primaryUserId = parsedUserIds.includes(req.user!.id) ? req.user!.id : parsedUserIds[0];
+    // Use paidByUserId if provided, otherwise use creator or first in list
+    const expenseUserId = paidByUserId || (parsedUserIds.includes(req.user!.id) ? req.user!.id : parsedUserIds[0]);
     
     const expense = await prisma.expense.create({
       data: {
@@ -217,7 +217,7 @@ router.post('/quick-split', authenticateToken, upload.single('receipt'), async (
         date: date ? new Date(date) : new Date(),
         receiptImage,
         notes: notes || `Equal split among ${parsedUserIds.length} people`,
-        userId: primaryUserId,
+        userId: expenseUserId,
         createdById: req.user!.id,
         categoryId: categoryId || null,
         splits: {

@@ -292,6 +292,7 @@ router.put('/:id/admin', authenticateToken, requireAdmin, async (req: AuthReques
 router.get('/:id/stats', authenticateToken, async (req: AuthRequest, res) => {
   try {
     const userId = req.params.id;
+    const currentUserId = req.user!.id;
 
     const [totalExpenses, totalPaymentsMade, totalPaymentsReceived, expenseCount] = await Promise.all([
       prisma.expense.aggregate({
@@ -309,11 +310,94 @@ router.get('/:id/stats', authenticateToken, async (req: AuthRequest, res) => {
       prisma.expense.count({ where: { userId } })
     ]);
 
+    // Calculate debt information
+    // Get all active users for fair share calculation
+    const allUsers = await prisma.user.findMany({
+      where: { isDeleted: false },
+      select: { id: true }
+    });
+    
+    // Get all expenses with splits
+    const allExpenses = await prisma.expense.findMany({
+      where: { isDeleted: false },
+      include: { splits: true }
+    });
+    
+    // Get all confirmed payments
+    const allPayments = await prisma.payment.findMany({
+      where: { status: 'confirmed' },
+      select: { fromUserId: true, toUserId: true, amount: true }
+    });
+
+    // Calculate what this user owes to others (their debt)
+    let userTotalDebt = 0;
+    
+    // Calculate what they owe each person
+    const userDebts: { [key: string]: number } = {};
+    
+    for (const otherUser of allUsers) {
+      if (otherUser.id === userId) continue;
+      
+      // Amount userId owes to otherUser (from otherUser's expenses that userId was split into)
+      let owes = 0;
+      for (const expense of allExpenses) {
+        if (expense.userId === otherUser.id) {
+          const split = expense.splits.find(s => s.userId === userId);
+          if (split) owes += split.amount;
+        }
+      }
+      
+      // Amount otherUser owes to userId (from userId's expenses)
+      let owed = 0;
+      for (const expense of allExpenses) {
+        if (expense.userId === userId) {
+          const split = expense.splits.find(s => s.userId === otherUser.id);
+          if (split) owed += split.amount;
+        }
+      }
+      
+      // Factor in payments
+      const paidToOther = allPayments
+        .filter(p => p.fromUserId === userId && p.toUserId === otherUser.id)
+        .reduce((sum, p) => sum + p.amount, 0);
+      
+      const receivedFromOther = allPayments
+        .filter(p => p.fromUserId === otherUser.id && p.toUserId === userId)
+        .reduce((sum, p) => sum + p.amount, 0);
+      
+      // Net: positive = userId owes otherUser, negative = otherUser owes userId
+      const netWithOther = owes - owed - paidToOther + receivedFromOther;
+      userDebts[otherUser.id] = netWithOther;
+      
+      if (netWithOther > 0) {
+        userTotalDebt += netWithOther;
+      }
+    }
+
+    // If checking another user, also calculate debt between current user and target user
+    let debtToCurrentUser = 0;  // What userId owes to currentUser
+    let currentUserDebt = 0;    // What currentUser owes to userId
+    
+    if (userId !== currentUserId) {
+      const netWithCurrent = userDebts[currentUserId] || 0;
+      if (netWithCurrent > 0) {
+        // userId owes currentUser
+        debtToCurrentUser = netWithCurrent;
+      } else if (netWithCurrent < 0) {
+        // currentUser owes userId
+        currentUserDebt = -netWithCurrent;
+      }
+    }
+
     res.json({
       totalExpenses: totalExpenses._sum.amount || 0,
       totalPaymentsMade: totalPaymentsMade._sum.amount || 0,
       totalPaymentsReceived: totalPaymentsReceived._sum.amount || 0,
-      expenseCount
+      expenseCount,
+      // Debt information
+      userTotalDebt: Math.round(userTotalDebt * 100) / 100,
+      debtToCurrentUser: Math.round(debtToCurrentUser * 100) / 100,
+      currentUserDebt: Math.round(currentUserDebt * 100) / 100
     });
   } catch (error) {
     console.error('Get user stats error:', error);

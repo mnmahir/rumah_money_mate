@@ -1,12 +1,15 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   PlusIcon,
   TrashIcon,
   CalculatorIcon,
   CheckCircleIcon,
   UsersIcon,
+  PhotoIcon,
+  XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { splitBillsAPI, usersAPI, categoriesAPI } from '../lib/api';
+import { useAuthStore } from '../stores/authStore';
 import Modal from '../components/Modal';
 import LoadingSpinner from '../components/LoadingSpinner';
 import toast from 'react-hot-toast';
@@ -56,6 +59,7 @@ export default function SplitBill() {
   const [formData, setFormData] = useState({
     title: '',
     categoryId: '',
+    paidByUserId: '',  // Will be set to current user on mount
     taxAmount: '',
     taxPercent: '',
     serviceCharge: '',
@@ -70,19 +74,44 @@ export default function SplitBill() {
     description: '',
     totalAmount: '',
     categoryId: '',
+    paidByUserId: '',  // Will be set to current user on mount
     taxAmount: '',
     taxPercent: '',
     serviceCharge: '',
     servicePercent: '',
     date: format(new Date(), 'yyyy-MM-dd'),
+    notes: '',
     userIds: [] as string[],
   });
   const [quickTaxMode, setQuickTaxMode] = useState<'amount' | 'percent'>('amount');
   const [quickServiceMode, setQuickServiceMode] = useState<'amount' | 'percent'>('amount');
 
+  // Receipt files
+  const [receiptFile, setReceiptFile] = useState<File | null>(null);
+  const [receiptPreview, setReceiptPreview] = useState<string | null>(null);
+  const [quickReceiptFile, setQuickReceiptFile] = useState<File | null>(null);
+  const [quickReceiptPreview, setQuickReceiptPreview] = useState<string | null>(null);
+  const receiptInputRef = useRef<HTMLInputElement>(null);
+  const quickReceiptInputRef = useRef<HTMLInputElement>(null);
+
+  // Get current user
+  const { user: currentUser } = useAuthStore();
+
   useEffect(() => {
     fetchData();
   }, []);
+
+  // Set default paidByUserId to current user when users are loaded
+  useEffect(() => {
+    if (currentUser && users.length > 0) {
+      if (!formData.paidByUserId) {
+        setFormData(prev => ({ ...prev, paidByUserId: currentUser.id }));
+      }
+      if (!quickSplitData.paidByUserId) {
+        setQuickSplitData(prev => ({ ...prev, paidByUserId: currentUser.id }));
+      }
+    }
+  }, [currentUser, users]);
 
   const fetchData = async () => {
     try {
@@ -182,35 +211,53 @@ export default function SplitBill() {
         (item) => item.description && item.amount && item.userId
       );
 
-      const payload: any = {
-        title: formData.title,
-        date: formData.date,
-        items: validItems.map((item) => ({
-          description: item.description,
-          amount: parseFloat(item.amount),
-          quantity: parseInt(item.quantity) || 1,
-          userId: item.userId,
-        })),
-      };
+      // Generate itemized notes from items
+      const itemizedNotes = validItems.map((item) => {
+        const user = users.find(u => u.id === item.userId);
+        const qty = parseInt(item.quantity) || 1;
+        const total = parseFloat(item.amount) * qty;
+        return `• ${item.description} x${qty} @ ${parseFloat(item.amount).toFixed(2)} = ${total.toFixed(2)} (${user?.displayName || 'Unknown'})`;
+      }).join('\n');
 
-      if (formData.categoryId) payload.categoryId = formData.categoryId;
-      if (formData.notes) payload.notes = formData.notes;
+      const finalNotes = formData.notes 
+        ? `${formData.notes}\n\n--- Items ---\n${itemizedNotes}`
+        : `--- Items ---\n${itemizedNotes}`;
+
+      // Build FormData for file upload support
+      const formDataPayload = new FormData();
+      formDataPayload.append('title', formData.title);
+      formDataPayload.append('date', formData.date);
+      formDataPayload.append('items', JSON.stringify(validItems.map((item) => ({
+        description: item.description,
+        amount: parseFloat(item.amount),
+        quantity: parseInt(item.quantity) || 1,
+        userId: item.userId,
+      }))));
+      formDataPayload.append('notes', finalNotes);
+
+      if (formData.categoryId) formDataPayload.append('categoryId', formData.categoryId);
+      if (formData.paidByUserId) formDataPayload.append('paidByUserId', formData.paidByUserId);
 
       // Add tax based on mode
       if (taxMode === 'percent' && formData.taxPercent) {
-        payload.taxPercent = parseFloat(formData.taxPercent);
+        formDataPayload.append('taxPercent', formData.taxPercent);
       } else if (formData.taxAmount) {
-        payload.taxAmount = parseFloat(formData.taxAmount);
+        formDataPayload.append('taxAmount', formData.taxAmount);
       }
 
       // Add service based on mode
       if (serviceMode === 'percent' && formData.servicePercent) {
-        payload.servicePercent = parseFloat(formData.servicePercent);
+        formDataPayload.append('servicePercent', formData.servicePercent);
       } else if (formData.serviceCharge) {
-        payload.serviceCharge = parseFloat(formData.serviceCharge);
+        formDataPayload.append('serviceCharge', formData.serviceCharge);
       }
 
-      await splitBillsAPI.createExpenses(payload);
+      // Add receipt if present
+      if (receiptFile) {
+        formDataPayload.append('receipt', receiptFile);
+      }
+
+      await splitBillsAPI.createExpenses(formDataPayload);
       toast.success('Expenses created successfully!');
       setShowModal(false);
       setShowCalculation(false);
@@ -227,30 +274,37 @@ export default function SplitBill() {
     }
 
     try {
-      const payload: any = {
-        description: quickSplitData.description,
-        totalAmount: parseFloat(quickSplitData.totalAmount),
-        date: quickSplitData.date,
-        userIds: quickSplitData.userIds,
-      };
+      // Build FormData for file upload support
+      const formDataPayload = new FormData();
+      formDataPayload.append('description', quickSplitData.description);
+      formDataPayload.append('totalAmount', quickSplitData.totalAmount);
+      formDataPayload.append('date', quickSplitData.date);
+      formDataPayload.append('userIds', JSON.stringify(quickSplitData.userIds));
 
-      if (quickSplitData.categoryId) payload.categoryId = quickSplitData.categoryId;
+      if (quickSplitData.categoryId) formDataPayload.append('categoryId', quickSplitData.categoryId);
+      if (quickSplitData.paidByUserId) formDataPayload.append('paidByUserId', quickSplitData.paidByUserId);
+      if (quickSplitData.notes) formDataPayload.append('notes', quickSplitData.notes);
 
       // Add tax based on mode
       if (quickTaxMode === 'percent' && quickSplitData.taxPercent) {
-        payload.taxPercent = parseFloat(quickSplitData.taxPercent);
+        formDataPayload.append('taxPercent', quickSplitData.taxPercent);
       } else if (quickSplitData.taxAmount) {
-        payload.taxAmount = parseFloat(quickSplitData.taxAmount);
+        formDataPayload.append('taxAmount', quickSplitData.taxAmount);
       }
 
       // Add service based on mode
       if (quickServiceMode === 'percent' && quickSplitData.servicePercent) {
-        payload.servicePercent = parseFloat(quickSplitData.servicePercent);
+        formDataPayload.append('servicePercent', quickSplitData.servicePercent);
       } else if (quickSplitData.serviceCharge) {
-        payload.serviceCharge = parseFloat(quickSplitData.serviceCharge);
+        formDataPayload.append('serviceCharge', quickSplitData.serviceCharge);
       }
 
-      await splitBillsAPI.quickSplit(payload);
+      // Add receipt if present
+      if (quickReceiptFile) {
+        formDataPayload.append('receipt', quickReceiptFile);
+      }
+
+      await splitBillsAPI.quickSplit(formDataPayload);
       toast.success('Bill split equally! Expenses created for each member.');
       setShowQuickSplitModal(false);
       resetQuickSplitForm();
@@ -272,6 +326,7 @@ export default function SplitBill() {
     setFormData({
       title: '',
       categoryId: '',
+      paidByUserId: currentUser?.id || '',
       taxAmount: '',
       taxPercent: '',
       serviceCharge: '',
@@ -283,6 +338,8 @@ export default function SplitBill() {
     setCalculatedResult(null);
     setTaxMode('amount');
     setServiceMode('amount');
+    setReceiptFile(null);
+    setReceiptPreview(null);
   };
 
   const resetQuickSplitForm = () => {
@@ -290,15 +347,45 @@ export default function SplitBill() {
       description: '',
       totalAmount: '',
       categoryId: '',
+      paidByUserId: currentUser?.id || '',
       taxAmount: '',
       taxPercent: '',
       serviceCharge: '',
       servicePercent: '',
       date: format(new Date(), 'yyyy-MM-dd'),
+      notes: '',
       userIds: [],
     });
     setQuickTaxMode('amount');
     setQuickServiceMode('amount');
+    setQuickReceiptFile(null);
+    setQuickReceiptPreview(null);
+  };
+
+  // Handle receipt file selection
+  const handleReceiptChange = (e: React.ChangeEvent<HTMLInputElement>, isQuickSplit: boolean = false) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (isQuickSplit) {
+        setQuickReceiptFile(file);
+        setQuickReceiptPreview(URL.createObjectURL(file));
+      } else {
+        setReceiptFile(file);
+        setReceiptPreview(URL.createObjectURL(file));
+      }
+    }
+  };
+
+  const removeReceipt = (isQuickSplit: boolean = false) => {
+    if (isQuickSplit) {
+      setQuickReceiptFile(null);
+      setQuickReceiptPreview(null);
+      if (quickReceiptInputRef.current) quickReceiptInputRef.current.value = '';
+    } else {
+      setReceiptFile(null);
+      setReceiptPreview(null);
+      if (receiptInputRef.current) receiptInputRef.current.value = '';
+    }
   };
 
   if (loading) {
@@ -313,58 +400,48 @@ export default function SplitBill() {
           <h1 className="text-2xl lg:text-3xl font-bold text-white">Split Bill</h1>
           <p className="text-white/60 mt-1">Calculate and split bills among members</p>
         </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => {
-              resetQuickSplitForm();
-              setShowQuickSplitModal(true);
-            }}
-            className="glass-button-secondary flex items-center gap-2"
-          >
-            <UsersIcon className="w-5 h-5" />
-            Quick Split
-          </button>
-          <button
-            onClick={() => {
-              resetForm();
-              setShowModal(true);
-            }}
-            className="glass-button flex items-center gap-2"
-          >
-            <PlusIcon className="w-5 h-5" />
-            Itemized Split
-          </button>
-        </div>
       </div>
 
-      {/* Info Cards */}
+      {/* Clickable Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="glass-card p-6">
+        <button
+          onClick={() => {
+            resetQuickSplitForm();
+            setShowQuickSplitModal(true);
+          }}
+          className="glass-card-hover p-6 text-left group"
+        >
           <div className="flex items-start gap-4">
-            <div className="w-12 h-12 rounded-xl bg-purple-500/20 flex items-center justify-center">
+            <div className="w-12 h-12 rounded-xl bg-purple-500/20 flex items-center justify-center group-hover:bg-purple-500/30 transition-colors">
               <UsersIcon className="w-6 h-6 text-purple-400" />
             </div>
-            <div>
-              <h3 className="font-semibold text-white mb-1">Quick Split</h3>
+            <div className="flex-1">
+              <h3 className="font-semibold text-white mb-1 group-hover:text-purple-300 transition-colors">Quick Split</h3>
               <p className="text-sm text-white/60">
                 Split a total amount equally among selected members. Great for shared meals, utilities, or any expense that's divided evenly.
               </p>
             </div>
           </div>
-        </div>
-        <div className="glass-card p-6">
+        </button>
+        <button
+          onClick={() => {
+            resetForm();
+            setShowModal(true);
+          }}
+          className="glass-card-hover p-6 text-left group"
+        >
           <div className="flex items-start gap-4">
-            <div className="w-12 h-12 rounded-xl bg-blue-500/20 flex items-center justify-center">
+            <div className="w-12 h-12 rounded-xl bg-blue-500/20 flex items-center justify-center group-hover:bg-blue-500/30 transition-colors">
               <CalculatorIcon className="w-6 h-6 text-blue-400" />
             </div>
-            <div>
-              <h3 className="font-semibold text-white mb-1">Itemized Split</h3>
+            <div className="flex-1">
+              <h3 className="font-semibold text-white mb-1 group-hover:text-blue-300 transition-colors">Itemized Split</h3>
               <p className="text-sm text-white/60">
                 Add individual items and assign them to members. Tax and service charges are proportionally split. Perfect for restaurant bills.
               </p>
             </div>
           </div>
-        </div>
+        </button>
       </div>
 
       {/* Quick Split Modal */}
@@ -429,6 +506,23 @@ export default function SplitBill() {
                 </option>
               ))}
             </select>
+          </div>
+
+          {/* Paid By */}
+          <div>
+            <label className="block text-sm font-medium text-white/70 mb-2">Paid By</label>
+            <select
+              value={quickSplitData.paidByUserId}
+              onChange={(e) => setQuickSplitData((prev) => ({ ...prev, paidByUserId: e.target.value }))}
+              className="glass-select"
+            >
+              {users.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.displayName} {u.id === currentUser?.id ? '(Me)' : ''}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-white/40 mt-1">Who paid for this bill?</p>
           </div>
 
           {/* Tax with percentage toggle */}
@@ -540,6 +634,55 @@ export default function SplitBill() {
             )}
           </div>
 
+          {/* Notes */}
+          <div>
+            <label className="block text-sm font-medium text-white/70 mb-2">Notes</label>
+            <textarea
+              value={quickSplitData.notes}
+              onChange={(e) => setQuickSplitData((prev) => ({ ...prev, notes: e.target.value }))}
+              className="glass-input"
+              rows={2}
+              placeholder="Add any additional notes..."
+            />
+          </div>
+
+          {/* Receipt Upload */}
+          <div>
+            <label className="block text-sm font-medium text-white/70 mb-2">Receipt Image</label>
+            <input
+              type="file"
+              ref={quickReceiptInputRef}
+              accept="image/*"
+              onChange={(e) => handleReceiptChange(e, true)}
+              className="hidden"
+            />
+            {quickReceiptPreview ? (
+              <div className="relative">
+                <img
+                  src={quickReceiptPreview}
+                  alt="Receipt preview"
+                  className="w-full h-40 object-cover rounded-xl"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeReceipt(true)}
+                  className="absolute top-2 right-2 p-1 bg-red-500 rounded-full hover:bg-red-600"
+                >
+                  <XMarkIcon className="w-4 h-4 text-white" />
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => quickReceiptInputRef.current?.click()}
+                className="w-full p-4 border-2 border-dashed border-white/20 rounded-xl hover:border-white/40 transition-colors"
+              >
+                <PhotoIcon className="w-8 h-8 mx-auto text-white/40" />
+                <p className="text-sm text-white/40 mt-2">Click to upload receipt</p>
+              </button>
+            )}
+          </div>
+
           <div className="flex gap-3 pt-4">
             <button
               type="button"
@@ -611,6 +754,23 @@ export default function SplitBill() {
                 ))}
               </select>
             </div>
+          </div>
+
+          {/* Paid By */}
+          <div>
+            <label className="block text-sm font-medium text-white/70 mb-2">Paid By</label>
+            <select
+              value={formData.paidByUserId}
+              onChange={(e) => setFormData((prev) => ({ ...prev, paidByUserId: e.target.value }))}
+              className="glass-select"
+            >
+              {users.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.displayName} {u.id === currentUser?.id ? '(Me)' : ''}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-white/40 mt-1">Who paid for this bill?</p>
           </div>
 
           <div className="grid grid-cols-2 gap-4">
@@ -698,14 +858,14 @@ export default function SplitBill() {
               <button
                 type="button"
                 onClick={handleAddItem}
-                className="text-purple-400 hover:text-purple-300 text-sm flex items-center gap-1"
+                className="px-3 py-1.5 bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/30 rounded-lg text-purple-400 hover:text-purple-300 text-sm font-medium flex items-center gap-1.5 transition-colors"
               >
                 <PlusIcon className="w-4 h-4" />
                 Add Item
               </button>
             </div>
 
-            <div className="space-y-3 max-h-64 overflow-y-auto">
+            <div className="space-y-3 max-h-80 overflow-y-auto pr-1 scrollbar-thin">
               {formData.items.map((item, index) => (
                 <div key={index} className="glass-card p-3 space-y-2">
                   <div className="flex items-center justify-between">
@@ -764,6 +924,55 @@ export default function SplitBill() {
                 </div>
               )}
             </div>
+          </div>
+
+          {/* Notes */}
+          <div>
+            <label className="block text-sm font-medium text-white/70 mb-2">Notes</label>
+            <textarea
+              value={formData.notes}
+              onChange={(e) => setFormData((prev) => ({ ...prev, notes: e.target.value }))}
+              className="glass-input"
+              rows={2}
+              placeholder="Add any additional notes (item details will be auto-generated)"
+            />
+          </div>
+
+          {/* Receipt Upload */}
+          <div>
+            <label className="block text-sm font-medium text-white/70 mb-2">Receipt Image</label>
+            <input
+              type="file"
+              ref={receiptInputRef}
+              accept="image/*"
+              onChange={(e) => handleReceiptChange(e, false)}
+              className="hidden"
+            />
+            {receiptPreview ? (
+              <div className="relative">
+                <img
+                  src={receiptPreview}
+                  alt="Receipt preview"
+                  className="w-full h-40 object-cover rounded-xl"
+                />
+                <button
+                  type="button"
+                  onClick={() => removeReceipt(false)}
+                  className="absolute top-2 right-2 p-1 bg-red-500 rounded-full hover:bg-red-600"
+                >
+                  <XMarkIcon className="w-4 h-4 text-white" />
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => receiptInputRef.current?.click()}
+                className="w-full p-4 border-2 border-dashed border-white/20 rounded-xl hover:border-white/40 transition-colors"
+              >
+                <PhotoIcon className="w-8 h-8 mx-auto text-white/40" />
+                <p className="text-sm text-white/40 mt-2">Click to upload receipt</p>
+              </button>
+            )}
           </div>
 
           <div className="flex gap-3 pt-4">
@@ -845,7 +1054,7 @@ export default function SplitBill() {
             <div className="p-4 rounded-xl bg-green-500/10 border border-green-500/20">
               <p className="text-sm text-green-400">
                 <CheckCircleIcon className="w-4 h-4 inline mr-1" />
-                This will create individual expense records for each person automatically.
+                This will create a single expense with splits for each person.
               </p>
             </div>
 

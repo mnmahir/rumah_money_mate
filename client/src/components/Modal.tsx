@@ -52,7 +52,7 @@ export default function Modal({
           </div>
           
           {/* Content */}
-          <div className="max-h-[60vh] overflow-y-auto">
+          <div className="max-h-[70vh] overflow-y-auto pr-1">
             {children}
           </div>
         </div>

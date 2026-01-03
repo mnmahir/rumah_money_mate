@@ -159,13 +159,14 @@ export const splitBillsAPI = {
 
 // Dashboard API
 export const dashboardAPI = {
-  getSummary: (params?: { period?: string; userId?: string }) =>
+  getDateRange: () => api.get('/dashboard/date-range'),
+  getSummary: (params?: { period?: string; userId?: string; startMonth?: number; startYear?: number; endMonth?: number; endYear?: number }) =>
     api.get('/dashboard/summary', { params }),
   getComparison: (params?: { period?: string }) =>
     api.get('/dashboard/comparison', { params }),
-  getExpenseTrend: (params?: { period?: string; categoryId?: string }) =>
+  getExpenseTrend: (params?: { period?: string; categoryId?: string; categoryIds?: string; startMonth?: number; startYear?: number; endMonth?: number; endYear?: number }) =>
     api.get('/dashboard/expense-trend', { params }),
-  getUtilitiesTrend: (params?: { period?: string }) =>
+  getUtilitiesTrend: (params?: { period?: string; startMonth?: number; startYear?: number; endMonth?: number; endYear?: number }) =>
     api.get('/dashboard/utilities-trend', { params }),
   getCategoryTrend: (params?: { categoryId?: string; months?: number }) =>
     api.get('/dashboard/category-trend', { params }),

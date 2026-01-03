@@ -172,9 +172,19 @@ router.put('/:id', authenticateToken, upload.single('receipt'), async (req: Auth
       return res.status(403).json({ error: 'This record is locked and cannot be edited. It is associated with a deleted user.' });
     }
 
-    // Check permission - only admin can edit
+    // Check permission - admin can always edit, users can edit own if setting allows
+    const isOwner = expense.userId === req.user!.id || expense.createdById === req.user!.id;
     if (!req.user!.isAdmin) {
-      return res.status(403).json({ error: 'Only admins can edit expenses' });
+      // Get the allowUserSelfEdit setting
+      const editSetting = await prisma.settings.findUnique({ where: { key: 'allowUserSelfEdit' } });
+      const allowUserSelfEdit = editSetting?.value === 'true';
+      
+      if (!isOwner) {
+        return res.status(403).json({ error: 'You can only edit your own expenses' });
+      }
+      if (!allowUserSelfEdit) {
+        return res.status(403).json({ error: 'Editing your own records is currently disabled by admin' });
+      }
     }
 
     const { description, amount, date, categoryId, notes, userId, usage, splits } = req.body;

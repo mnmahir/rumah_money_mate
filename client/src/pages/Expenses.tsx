@@ -8,6 +8,12 @@ import {
   MagnifyingGlassIcon,
   ExclamationTriangleIcon,
   CalendarIcon,
+  EyeIcon,
+  UserIcon,
+  TagIcon,
+  DocumentTextIcon,
+  CurrencyDollarIcon,
+  UsersIcon,
 } from '@heroicons/react/24/outline';
 import { expensesAPI, categoriesAPI, usersAPI, deleteRequestsAPI } from '../lib/api';
 import { useAuthStore } from '../stores/authStore';
@@ -52,7 +58,7 @@ interface Member {
 
 export default function Expenses() {
   const { user } = useAuthStore();
-  const { currency, waterUnit, electricityUnit } = useSettingsStore();
+  const { currency, waterUnit, electricityUnit, allowUserSelfDelete, allowUserSelfEdit } = useSettingsStore();
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
@@ -60,6 +66,8 @@ export default function Expenses() {
   const [showModal, setShowModal] = useState(false);
   const [showReceiptModal, setShowReceiptModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showViewModal, setShowViewModal] = useState(false);
+  const [viewingExpense, setViewingExpense] = useState<Expense | null>(null);
   const [deletingExpense, setDeletingExpense] = useState<Expense | null>(null);
   const [deleteReason, setDeleteReason] = useState('');
   const [selectedReceipt, setSelectedReceipt] = useState<string | null>(null);
@@ -263,8 +271,10 @@ export default function Expenses() {
   };
 
   const handleDelete = async (expense: Expense) => {
+    const isOwner = expense.user.id === user?.id || expense.createdBy?.id === user?.id;
+    
     if (user?.isAdmin) {
-      // Admin can delete directly
+      // Admin can always delete directly
       if (!confirm('Are you sure you want to delete this expense?')) return;
       try {
         await expensesAPI.delete(expense.id);
@@ -273,8 +283,23 @@ export default function Expenses() {
       } catch (error: any) {
         toast.error(error.response?.data?.error || 'Failed to delete expense');
       }
+    } else if (isOwner && allowUserSelfDelete) {
+      // Owner can delete directly when setting enabled
+      if (!confirm('Are you sure you want to delete this expense?')) return;
+      try {
+        await expensesAPI.delete(expense.id);
+        toast.success('Expense deleted successfully');
+        fetchExpenses();
+      } catch (error: any) {
+        toast.error(error.response?.data?.error || 'Failed to delete expense');
+      }
+    } else if (isOwner && !allowUserSelfDelete) {
+      // Owner but setting disabled - show delete request modal
+      setDeletingExpense(expense);
+      setDeleteReason('');
+      setShowDeleteModal(true);
     } else {
-      // Non-admin: show delete request modal
+      // Not owner - show delete request modal
       setDeletingExpense(expense);
       setDeleteReason('');
       setShowDeleteModal(true);
@@ -300,6 +325,12 @@ export default function Expenses() {
   };
 
   const handleEdit = (expense: Expense) => {
+    // Check if user can edit
+    if (!user?.isAdmin && !allowUserSelfEdit) {
+      toast.error('Editing your own records is currently disabled by admin');
+      return;
+    }
+    
     setEditingExpense(expense);
     // Load existing splits or initialize with members
     const existingSplits = expense.splits && expense.splits.length > 0
@@ -362,7 +393,7 @@ export default function Expenses() {
   );
 
   const canEdit = (expense: Expense) =>
-    expense.user.id === user?.id || user?.isAdmin;
+    user?.isAdmin || expense.user.id === user?.id;
 
   return (
     <div className="space-y-6 animate-slide-in">
@@ -542,31 +573,49 @@ export default function Expenses() {
                         )}
                       </td>
                       <td className="table-cell">
-                        {canEdit(expense) && (
-                          <div className="flex items-center gap-2">
-                            <button
-                              onClick={() => handleEdit(expense)}
-                              className="p-1.5 rounded-lg hover:bg-white/10 text-white/60 hover:text-white"
-                            >
-                              <PencilIcon className="w-4 h-4" />
-                            </button>
-                            <button
-                              onClick={() => handleDelete(expense)}
-                              className={`p-1.5 rounded-lg text-white/60 ${
-                                user?.isAdmin 
-                                  ? 'hover:bg-red-500/20 hover:text-red-400'
-                                  : 'hover:bg-yellow-500/20 hover:text-yellow-400'
-                              }`}
-                              title={user?.isAdmin ? 'Delete' : 'Request deletion'}
-                            >
-                              {user?.isAdmin ? (
-                                <TrashIcon className="w-4 h-4" />
-                              ) : (
-                                <ExclamationTriangleIcon className="w-4 h-4" />
-                              )}
-                            </button>
-                          </div>
-                        )}
+                        <div className="flex items-center gap-2">
+                          {/* View Button - Available to everyone */}
+                          <button
+                            onClick={() => {
+                              setViewingExpense(expense);
+                              setShowViewModal(true);
+                            }}
+                            className="p-1.5 rounded-lg text-white/60 hover:bg-purple-500/20 hover:text-purple-400"
+                            title="View details"
+                          >
+                            <EyeIcon className="w-4 h-4" />
+                          </button>
+                          {canEdit(expense) && (
+                            <>
+                              <button
+                                onClick={() => handleEdit(expense)}
+                                className={`p-1.5 rounded-lg text-white/60 ${
+                                  user?.isAdmin || allowUserSelfEdit
+                                    ? 'hover:bg-white/10 hover:text-white'
+                                    : 'hover:bg-yellow-500/20 hover:text-yellow-400'
+                                }`}
+                                title={user?.isAdmin || allowUserSelfEdit ? 'Edit' : 'Editing disabled'}
+                              >
+                                <PencilIcon className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={() => handleDelete(expense)}
+                                className={`p-1.5 rounded-lg text-white/60 ${
+                                  user?.isAdmin || allowUserSelfDelete
+                                    ? 'hover:bg-red-500/20 hover:text-red-400'
+                                    : 'hover:bg-yellow-500/20 hover:text-yellow-400'
+                                }`}
+                                title={user?.isAdmin ? 'Delete' : (allowUserSelfDelete ? 'Delete' : 'Request deletion')}
+                              >
+                                {user?.isAdmin || allowUserSelfDelete ? (
+                                  <TrashIcon className="w-4 h-4" />
+                                ) : (
+                                  <ExclamationTriangleIcon className="w-4 h-4" />
+                                )}
+                              </button>
+                            </>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -1021,6 +1070,160 @@ export default function Expenses() {
             </button>
           </div>
         </div>
+      </Modal>
+
+      {/* View Expense Modal */}
+      <Modal
+        isOpen={showViewModal}
+        onClose={() => {
+          setShowViewModal(false);
+          setViewingExpense(null);
+        }}
+        title="Expense Details"
+      >
+        {viewingExpense && (
+          <div className="space-y-6">
+            {/* Header with amount */}
+            <div className="text-center p-6 rounded-2xl bg-gradient-to-br from-purple-500/20 to-blue-500/20 border border-white/10">
+              <p className="text-white/60 text-sm mb-1">Amount</p>
+              <p className="text-4xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-green-400 to-emerald-400">
+                {currency} {viewingExpense.amount.toFixed(2)}
+              </p>
+              <p className="text-lg text-white mt-2">{viewingExpense.description}</p>
+            </div>
+
+            {/* Details Grid */}
+            <div className="grid grid-cols-2 gap-4">
+              {/* Date */}
+              <div className="p-4 rounded-xl bg-white/5">
+                <div className="flex items-center gap-2 text-white/60 text-sm mb-1">
+                  <CalendarIcon className="w-4 h-4" />
+                  <span>Date</span>
+                </div>
+                <p className="text-white font-medium">
+                  {format(new Date(viewingExpense.date), 'dd MMM yyyy')}
+                </p>
+              </div>
+
+              {/* Category */}
+              <div className="p-4 rounded-xl bg-white/5">
+                <div className="flex items-center gap-2 text-white/60 text-sm mb-1">
+                  <TagIcon className="w-4 h-4" />
+                  <span>Category</span>
+                </div>
+                <p className="text-white font-medium">
+                  {viewingExpense.category ? (
+                    <span>
+                      {viewingExpense.category.icon} {viewingExpense.category.name}
+                    </span>
+                  ) : (
+                    <span className="text-white/40">Uncategorized</span>
+                  )}
+                </p>
+              </div>
+
+              {/* Paid By */}
+              <div className="p-4 rounded-xl bg-white/5">
+                <div className="flex items-center gap-2 text-white/60 text-sm mb-1">
+                  <CurrencyDollarIcon className="w-4 h-4" />
+                  <span>Paid By</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {viewingExpense.user.avatarUrl ? (
+                    <img src={viewingExpense.user.avatarUrl} className="w-6 h-6 rounded-full" alt="" />
+                  ) : (
+                    <div className="w-6 h-6 rounded-full bg-gradient-to-br from-purple-400 to-purple-600 flex items-center justify-center text-xs text-white">
+                      {viewingExpense.user.displayName[0]}
+                    </div>
+                  )}
+                  <span className="text-white font-medium">{viewingExpense.user.displayName}</span>
+                </div>
+              </div>
+
+              {/* Recorded By */}
+              {viewingExpense.createdBy && (
+                <div className="p-4 rounded-xl bg-white/5">
+                  <div className="flex items-center gap-2 text-white/60 text-sm mb-1">
+                    <UserIcon className="w-4 h-4" />
+                    <span>Recorded By</span>
+                  </div>
+                  <p className="text-white font-medium">{viewingExpense.createdBy.displayName}</p>
+                </div>
+              )}
+            </div>
+
+            {/* Usage (for utilities) */}
+            {viewingExpense.usage && (
+              <div className="p-4 rounded-xl bg-white/5">
+                <div className="flex items-center gap-2 text-white/60 text-sm mb-1">
+                  <DocumentTextIcon className="w-4 h-4" />
+                  <span>Usage</span>
+                </div>
+                <p className="text-white font-medium">
+                  {viewingExpense.usage} {viewingExpense.category?.name?.toLowerCase().includes('water') ? waterUnit : electricityUnit}
+                </p>
+              </div>
+            )}
+
+            {/* Splits */}
+            {viewingExpense.splits && viewingExpense.splits.length > 0 && (
+              <div className="p-4 rounded-xl bg-white/5">
+                <div className="flex items-center gap-2 text-white/60 text-sm mb-3">
+                  <UsersIcon className="w-4 h-4" />
+                  <span>Split Among ({viewingExpense.splits.length} people)</span>
+                </div>
+                <div className="space-y-2">
+                  {viewingExpense.splits.map((split, idx) => {
+                    const member = members.find(m => m.id === split.userId);
+                    return (
+                      <div key={idx} className="flex items-center justify-between p-2 rounded-lg bg-white/5">
+                        <span className="text-white">{member?.displayName || 'Unknown'}</span>
+                        <span className="text-green-400 font-medium">{currency} {split.amount.toFixed(2)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Notes */}
+            {viewingExpense.notes && (
+              <div className="p-4 rounded-xl bg-white/5">
+                <div className="flex items-center gap-2 text-white/60 text-sm mb-2">
+                  <DocumentTextIcon className="w-4 h-4" />
+                  <span>Notes</span>
+                </div>
+                <p className="text-white whitespace-pre-wrap">{viewingExpense.notes}</p>
+              </div>
+            )}
+
+            {/* Receipt */}
+            {viewingExpense.receiptImage && (
+              <div className="p-4 rounded-xl bg-white/5">
+                <div className="flex items-center gap-2 text-white/60 text-sm mb-2">
+                  <PhotoIcon className="w-4 h-4" />
+                  <span>Receipt</span>
+                </div>
+                <img
+                  src={viewingExpense.receiptImage}
+                  alt="Receipt"
+                  className="w-full rounded-xl cursor-pointer hover:opacity-80 transition-opacity"
+                  onClick={() => handleViewReceipt(viewingExpense.receiptImage!)}
+                />
+              </div>
+            )}
+
+            <button
+              onClick={() => {
+                setShowViewModal(false);
+                setViewingExpense(null);
+              }}
+              className="glass-button w-full"
+            >
+              Close
+            </button>
+          </div>
+        )}
       </Modal>
     </div>
   );

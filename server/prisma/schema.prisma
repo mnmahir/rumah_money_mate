@@ -186,6 +186,8 @@ model RecurringExpense {
   nextDueDate        DateTime
   isActive           Boolean   @default(true)
   splitEqually       Boolean   @default(true)  // Whether to split among all active members
+  splitType          String    @default("equal") // equal, percentage, amount
+  splitConfig        String?   // JSON: Array of {userId, percentage?, amount?} for custom splits
   notes              String?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt

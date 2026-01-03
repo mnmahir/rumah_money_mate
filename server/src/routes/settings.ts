@@ -10,6 +10,7 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   waterUnit: 'm³',
   electricityUnit: 'kWh',
   allowUserSelfDelete: 'false',  // Allow users to delete their own records (default: disabled)
+  allowUserSelfEdit: 'false',    // Allow users to edit their own records (default: disabled)
   autoAcceptPayments: 'true',    // Auto-accept payments when made (default: enabled)
   requirePaymentReceipt: 'true', // Require receipt upload for payments (default: required)
 };

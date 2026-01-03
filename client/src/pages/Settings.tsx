@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Cog6ToothIcon, CurrencyDollarIcon, BeakerIcon, BoltIcon, TrashIcon, CheckCircleIcon, DocumentIcon } from '@heroicons/react/24/outline';
+import { Cog6ToothIcon, CurrencyDollarIcon, BeakerIcon, BoltIcon, TrashIcon, PencilIcon, CheckCircleIcon, DocumentIcon } from '@heroicons/react/24/outline';
 import { settingsAPI } from '../lib/api';
 import { useAuthStore } from '../stores/authStore';
+import { useSettingsStore } from '../stores/settingsStore';
 import LoadingSpinner from '../components/LoadingSpinner';
 import toast from 'react-hot-toast';
 import { Navigate } from 'react-router-dom';
@@ -11,17 +12,20 @@ interface Settings {
   waterUnit: string;
   electricityUnit: string;
   allowUserSelfDelete: string;
+  allowUserSelfEdit: string;
   autoAcceptPayments: string;
   requirePaymentReceipt: string;
 }
 
 export default function Settings() {
   const { user } = useAuthStore();
+  const refreshGlobalSettings = useSettingsStore((state) => state.fetchSettings);
   const [settings, setSettings] = useState<Settings>({
     currency: 'RM',
     waterUnit: 'm³',
     electricityUnit: 'kWh',
     allowUserSelfDelete: 'false',
+    allowUserSelfEdit: 'false',
     autoAcceptPayments: 'true',
     requirePaymentReceipt: 'true',
   });
@@ -53,6 +57,8 @@ export default function Settings() {
     try {
       setSaving(true);
       await settingsAPI.update(settings as unknown as Record<string, string>);
+      // Refresh global settings store so changes apply immediately across the app
+      await refreshGlobalSettings();
       toast.success('Settings saved successfully');
     } catch (error: any) {
       toast.error(error.response?.data?.error || 'Failed to save settings');
@@ -171,6 +177,37 @@ export default function Settings() {
               <span
                 className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
                   settings.allowUserSelfDelete === 'true' ? 'translate-x-5' : 'translate-x-0'
+                }`}
+              />
+            </button>
+          </div>
+
+          {/* Allow Users to Edit Own Records */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-start gap-3">
+              <PencilIcon className="w-5 h-5 text-blue-400 mt-0.5" />
+              <div>
+                <label className="text-sm font-medium text-white">
+                  Allow Users to Edit Own Records
+                </label>
+                <p className="text-xs text-white/40 mt-1">
+                  When enabled, users can edit their own expenses and payments without admin approval
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSettings({ 
+                ...settings, 
+                allowUserSelfEdit: settings.allowUserSelfEdit === 'true' ? 'false' : 'true' 
+              })}
+              className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 focus:ring-offset-gray-900 ${
+                settings.allowUserSelfEdit === 'true' ? 'bg-purple-600' : 'bg-white/20'
+              }`}
+            >
+              <span
+                className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                  settings.allowUserSelfEdit === 'true' ? 'translate-x-5' : 'translate-x-0'
                 }`}
               />
             </button>

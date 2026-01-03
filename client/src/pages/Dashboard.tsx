@@ -65,11 +65,34 @@ interface Category {
   color: string;
 }
 
-type Period = '6months' | '1year' | '2years' | '5years' | 'all';
+type Period = '6months' | '1year' | '2years' | '5years' | 'all' | 'custom';
+
+interface DateRange {
+  earliestMonth: number;
+  earliestYear: number;
+  latestMonth: number;
+  latestYear: number;
+  hasData: boolean;
+}
 
 export default function Dashboard() {
   const [period, setPeriod] = useState<Period>('6months');
-  const [trendCategory, setTrendCategory] = useState<string>('all');
+  const [dateRange, setDateRange] = useState<DateRange>({
+    earliestMonth: new Date().getMonth() + 1,
+    earliestYear: new Date().getFullYear(),
+    latestMonth: new Date().getMonth() + 1,
+    latestYear: new Date().getFullYear(),
+    hasData: false
+  });
+  const [customRange, setCustomRange] = useState({
+    startMonth: new Date().getMonth() + 1,
+    startYear: new Date().getFullYear() - 1,
+    endMonth: new Date().getMonth() + 1,
+    endYear: new Date().getFullYear()
+  });
+  const [showCustomRange, setShowCustomRange] = useState(false);
+  const [selectedCategories, setSelectedCategories] = useState<string[]>(['all']);
+  const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
   const [showMyDataOnly, setShowMyDataOnly] = useState(false);
   const [data, setData] = useState<DashboardData | null>(null);
   const [balances, setBalances] = useState<Balance[]>([]);
@@ -85,25 +108,52 @@ export default function Dashboard() {
   const { currency, waterUnit, electricityUnit } = useSettingsStore();
   const { user } = useAuthStore();
 
+  // Fetch date range on mount
+  useEffect(() => {
+    const fetchDateRange = async () => {
+      try {
+        const res = await dashboardAPI.getDateRange();
+        const range = res.data;
+        setDateRange(range);
+        // Initialize custom range with earliest to latest
+        setCustomRange({
+          startMonth: range.earliestMonth,
+          startYear: range.earliestYear,
+          endMonth: range.latestMonth,
+          endYear: range.latestYear
+        });
+      } catch (error) {
+        console.error('Failed to fetch date range:', error);
+      }
+    };
+    fetchDateRange();
+  }, []);
+
   useEffect(() => {
     fetchDashboardData();
-  }, [period, showMyDataOnly]);
+  }, [period, showMyDataOnly, customRange]);
 
   useEffect(() => {
     fetchExpenseTrend();
-  }, [period, trendCategory, showMyDataOnly]);
+  }, [period, selectedCategories, showMyDataOnly, customRange]);
 
   const fetchDashboardData = async () => {
     try {
       setLoading(true);
       const params: any = { period };
+      if (period === 'custom') {
+        params.startMonth = customRange.startMonth;
+        params.startYear = customRange.startYear;
+        params.endMonth = customRange.endMonth;
+        params.endYear = customRange.endYear;
+      }
       if (showMyDataOnly && user) {
         params.userId = user.id;
       }
       const [summaryRes, balancesRes, utilitiesRes, categoriesRes] = await Promise.all([
         dashboardAPI.getSummary(params),
         dashboardAPI.getBalances(),
-        dashboardAPI.getUtilitiesTrend({ period }),
+        dashboardAPI.getUtilitiesTrend(params),
         categoriesAPI.getAll(),
       ]);
       setData(summaryRes.data);
@@ -119,7 +169,18 @@ export default function Dashboard() {
 
   const fetchExpenseTrend = async () => {
     try {
-      const params: any = { period, categoryId: trendCategory };
+      const params: any = { period };
+      if (period === 'custom') {
+        params.startMonth = customRange.startMonth;
+        params.startYear = customRange.startYear;
+        params.endMonth = customRange.endMonth;
+        params.endYear = customRange.endYear;
+      }
+      if (selectedCategories.includes('all')) {
+        params.categoryIds = 'all';
+      } else {
+        params.categoryIds = selectedCategories.join(',');
+      }
       if (showMyDataOnly && user) {
         params.userId = user.id;
       }
@@ -271,7 +332,18 @@ export default function Dashboard() {
     '2years': '2 Years',
     '5years': '5 Years',
     'all': 'All Time',
+    'custom': 'Custom',
   };
+
+  const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  
+  // Generate year options from earliest data year to current year
+  const currentYear = new Date().getFullYear();
+  const startYear = dateRange.hasData ? dateRange.earliestYear : currentYear;
+  const yearOptions = Array.from(
+    { length: currentYear - startYear + 1 }, 
+    (_, i) => currentYear - i
+  );
 
   // Utilities chart configuration
   const utilitiesChartData = {
@@ -398,7 +470,14 @@ export default function Dashboard() {
             {(Object.keys(periodLabels) as Period[]).map((p) => (
               <button
                 key={p}
-                onClick={() => setPeriod(p)}
+                onClick={() => {
+                  setPeriod(p);
+                  if (p === 'custom') {
+                    setShowCustomRange(true);
+                  } else {
+                    setShowCustomRange(false);
+                  }
+                }}
                 className={`px-3 py-1.5 rounded-xl text-sm font-medium transition-all ${
                   period === p
                     ? 'bg-purple-500 text-white shadow-lg shadow-purple-500/30'
@@ -411,6 +490,99 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* Custom Date Range Picker */}
+      {showCustomRange && (
+        <div className="glass-card p-4">
+          <div className="flex flex-wrap items-center gap-4">
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-white/60">From:</span>
+              <select
+                value={customRange.startMonth}
+                onChange={(e) => setCustomRange(prev => ({ ...prev, startMonth: parseInt(e.target.value) }))}
+                className="glass-select text-sm py-1 px-3 min-w-[70px]"
+              >
+                {monthNames.map((m, i) => {
+                  const monthNum = i + 1;
+                  // For start year = earliest year, only show months >= earliest month
+                  // For start year = latest year, only show months <= latest month
+                  const isEarliestYear = customRange.startYear === dateRange.earliestYear;
+                  const isLatestYear = customRange.startYear === dateRange.latestYear;
+                  const isValidMonth = 
+                    (!isEarliestYear || monthNum >= dateRange.earliestMonth) &&
+                    (!isLatestYear || monthNum <= dateRange.latestMonth);
+                  if (!isValidMonth) return null;
+                  return <option key={m} value={monthNum}>{m}</option>;
+                })}
+              </select>
+              <select
+                value={customRange.startYear}
+                onChange={(e) => {
+                  const newYear = parseInt(e.target.value);
+                  let newMonth = customRange.startMonth;
+                  // Adjust month if it's out of valid range for the new year
+                  if (newYear === dateRange.earliestYear && newMonth < dateRange.earliestMonth) {
+                    newMonth = dateRange.earliestMonth;
+                  }
+                  if (newYear === dateRange.latestYear && newMonth > dateRange.latestMonth) {
+                    newMonth = dateRange.latestMonth;
+                  }
+                  setCustomRange(prev => ({ ...prev, startYear: newYear, startMonth: newMonth }));
+                }}
+                className="glass-select text-sm py-1 px-3 min-w-[80px]"
+              >
+                {yearOptions.map(y => (
+                  <option key={y} value={y}>{y}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-white/60">To:</span>
+              <select
+                value={customRange.endMonth}
+                onChange={(e) => setCustomRange(prev => ({ ...prev, endMonth: parseInt(e.target.value) }))}
+                className="glass-select text-sm py-1 px-3 min-w-[70px]"
+              >
+                {monthNames.map((m, i) => {
+                  const monthNum = i + 1;
+                  // For end year = earliest year, only show months >= earliest month
+                  // For end year = latest year, only show months <= latest month
+                  const isEarliestYear = customRange.endYear === dateRange.earliestYear;
+                  const isLatestYear = customRange.endYear === dateRange.latestYear;
+                  const isValidMonth = 
+                    (!isEarliestYear || monthNum >= dateRange.earliestMonth) &&
+                    (!isLatestYear || monthNum <= dateRange.latestMonth);
+                  if (!isValidMonth) return null;
+                  return <option key={m} value={monthNum}>{m}</option>;
+                })}
+              </select>
+              <select
+                value={customRange.endYear}
+                onChange={(e) => {
+                  const newYear = parseInt(e.target.value);
+                  let newMonth = customRange.endMonth;
+                  // Adjust month if it's out of valid range for the new year
+                  if (newYear === dateRange.earliestYear && newMonth < dateRange.earliestMonth) {
+                    newMonth = dateRange.earliestMonth;
+                  }
+                  if (newYear === dateRange.latestYear && newMonth > dateRange.latestMonth) {
+                    newMonth = dateRange.latestMonth;
+                  }
+                  setCustomRange(prev => ({ ...prev, endYear: newYear, endMonth: newMonth }));
+                }}
+                className="glass-select text-sm py-1 px-3 min-w-[80px]"
+              >
+                {yearOptions.map(y => (
+                  <option key={y} value={y}>{y}</option>
+                ))}
+              </select>
+            </div>
+            <span className="text-sm text-white/60 whitespace-nowrap">
+              Showing: {monthNames[customRange.startMonth - 1]} {customRange.startYear} → {monthNames[customRange.endMonth - 1]} {customRange.endYear}
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Stats Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -489,18 +661,93 @@ export default function Dashboard() {
         <div className="glass-card p-6">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-lg font-semibold text-white">Expense Trend</h3>
-            <select
-              value={trendCategory}
-              onChange={(e) => setTrendCategory(e.target.value)}
-              className="glass-select text-sm py-1 px-3"
-            >
-              <option value="all">All Categories</option>
-              {categories.map((cat) => (
-                <option key={cat.id} value={cat.id}>
-                  {cat.icon} {cat.name}
-                </option>
-              ))}
-            </select>
+            <div className="relative">
+              <button
+                onClick={() => setShowCategoryDropdown(!showCategoryDropdown)}
+                className="glass-select text-sm py-1 px-3 min-w-[150px] text-left flex items-center justify-between"
+              >
+                <span className="truncate">
+                  {selectedCategories.includes('all') 
+                    ? 'All Categories' 
+                    : selectedCategories.length === 1
+                      ? (selectedCategories[0] === 'uncategorized' 
+                          ? 'Uncategorized'
+                          : categories.find(c => c.id === selectedCategories[0])?.name || 'Selected')
+                      : `${selectedCategories.length} selected`}
+                </span>
+              </button>
+              {showCategoryDropdown && (
+                <>
+                  <div 
+                    className="fixed inset-0 z-10" 
+                    onClick={() => setShowCategoryDropdown(false)}
+                  />
+                  <div className="absolute right-0 top-full mt-1 z-20 w-56 bg-[#1a1025] border border-white/10 rounded-xl shadow-xl max-h-64 overflow-y-auto">
+                    {/* All Categories option */}
+                    <label className="flex items-center gap-3 px-3 py-2 hover:bg-white/5 cursor-pointer border-b border-white/10">
+                      <input
+                        type="checkbox"
+                        checked={selectedCategories.includes('all')}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedCategories(['all']);
+                          }
+                        }}
+                        className="w-4 h-4 rounded bg-white/10 border-white/20 text-purple-500 focus:ring-purple-500"
+                      />
+                      <span className="text-white font-medium">All Categories</span>
+                    </label>
+                    
+                    {/* Uncategorized option */}
+                    <label className="flex items-center gap-3 px-3 py-2 hover:bg-white/5 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={selectedCategories.includes('uncategorized')}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedCategories(prev => 
+                              prev.includes('all') 
+                                ? ['uncategorized'] 
+                                : [...prev.filter(c => c !== 'all'), 'uncategorized']
+                            );
+                          } else {
+                            const newSelection = selectedCategories.filter(c => c !== 'uncategorized');
+                            setSelectedCategories(newSelection.length === 0 ? ['all'] : newSelection);
+                          }
+                        }}
+                        className="w-4 h-4 rounded bg-white/10 border-white/20 text-gray-500 focus:ring-gray-500"
+                      />
+                      <span className="text-white/70">📁 Uncategorized</span>
+                    </label>
+                    
+                    {/* Category options */}
+                    {categories.map((cat) => (
+                      <label key={cat.id} className="flex items-center gap-3 px-3 py-2 hover:bg-white/5 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={selectedCategories.includes(cat.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedCategories(prev => 
+                                prev.includes('all') 
+                                  ? [cat.id] 
+                                  : [...prev.filter(c => c !== 'all'), cat.id]
+                              );
+                            } else {
+                              const newSelection = selectedCategories.filter(c => c !== cat.id);
+                              setSelectedCategories(newSelection.length === 0 ? ['all'] : newSelection);
+                            }
+                          }}
+                          className="w-4 h-4 rounded bg-white/10 border-white/20 text-purple-500 focus:ring-purple-500"
+                          style={{ accentColor: cat.color || '#9333ea' }}
+                        />
+                        <span className="text-white/70">{cat.icon} {cat.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
           </div>
           <div className="h-64">
             <Line data={lineChartData} options={lineChartOptions} />

@@ -6,6 +6,7 @@ interface SettingsState {
   waterUnit: string;
   electricityUnit: string;
   allowUserSelfDelete: boolean;
+  allowUserSelfEdit: boolean;
   autoAcceptPayments: boolean;
   requirePaymentReceipt: boolean;
   loaded: boolean;
@@ -18,6 +19,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
   waterUnit: 'm³',
   electricityUnit: 'kWh',
   allowUserSelfDelete: false,
+  allowUserSelfEdit: false,
   autoAcceptPayments: true,
   requirePaymentReceipt: true,
   loaded: false,
@@ -32,6 +34,7 @@ export const useSettingsStore = create<SettingsState>((set) => ({
         waterUnit: response.data.waterUnit || 'm³',
         electricityUnit: response.data.electricityUnit || 'kWh',
         allowUserSelfDelete: response.data.allowUserSelfDelete === 'true',
+        allowUserSelfEdit: response.data.allowUserSelfEdit === 'true',
         autoAcceptPayments: response.data.autoAcceptPayments !== 'false',  // default true
         requirePaymentReceipt: response.data.requirePaymentReceipt !== 'false',  // default true
         loaded: true,
