@@ -1,0 +1,53 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# Environment files (contain secrets)
+.env
+.env.local
+.env.*.local
+
+# Database
+*.db
+*.db-journal
+
+# Uploads (user data)
+server/uploads/receipts/*
+server/uploads/avatars/*
+server/uploads/qrcodes/*
+!server/uploads/receipts/.gitkeep
+!server/uploads/avatars/.gitkeep
+!server/uploads/qrcodes/.gitkeep
+
+# Backups (user data)
+backups/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test coverage
+coverage/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Reference/notes (personal)
+zref/
